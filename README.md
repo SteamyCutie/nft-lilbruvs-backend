@@ -1,2 +1,2 @@
-# nft-lilbruvs
-Little Bruvs NFT
+# nft-lilbruvs-backend
+Little Bruvs NFT backend
