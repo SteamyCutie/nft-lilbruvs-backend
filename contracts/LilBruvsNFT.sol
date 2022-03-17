@@ -11,12 +11,26 @@ import "@openzeppelin/contracts/utils/Strings.sol";
 contract LilBruvsNFT is ERC721URIStorage, Ownable, ReentrancyGuard {
   string public baseURI;
 
-  uint256 public maxDropMint = 400;
   uint256 public publicMintId = 1;
-  uint256 public SALE_PRICE = 0.00 ether;
-  uint256 public DROP_NUMBER = 1;
+  uint256 public whiteListMintId = 1;
+  uint256 public whiteListMintPrice = 0.00 ether;
+  uint256 public publicMintPrice = 0.00 ether;
+  uint256 public dropNumber = 0;
+
+  uint256 public mintFrom = 0;
+  uint256 public mintTo = 300;
+  uint256 public maxMintPerDrop = 3;
+
+  uint256 public whiteListSize = 10;
+  bytes32 public whiteListMerkleRoot;
+
+  uint256 public totalMinted = 0;
 
   bool public isPaused = true;
+
+  mapping(address => bool) public isClaimed;
+  mapping(address => uint256) public currentDrop;
+  mapping(address => uint256) public currentMinted;
 
   address taylorAddr = 0x194f207Ac9C55Dbdcea44D3ff65b5D427e5b7f62;
   address oddzleAddr = 0xFBE11edE3c277594e86251650A98b26C776eA033;
@@ -36,9 +50,21 @@ contract LilBruvsNFT is ERC721URIStorage, Ownable, ReentrancyGuard {
     _;
   }
 
+  modifier isValidMerkleProof(bytes32[] calldata merkleProof, bytes32 root) {
+    require(
+      MerkleProof.verify(
+        merkleProof,
+          root,
+          keccak256(abi.encodePacked(msg.sender))
+      ),
+      "Error: Address is NOT whitelisted yet!"
+    );
+    _;
+  }
+
   modifier isCorrectPayment(uint256 price, uint256 numberOfTokens) {
     require(
-      price * numberOfTokens == msg.value,
+      price * numberOfTokens <= msg.value,
       "Error: Sent ETH value is INCORRECT!"
     );
     _;
@@ -46,7 +72,7 @@ contract LilBruvsNFT is ERC721URIStorage, Ownable, ReentrancyGuard {
 
   modifier canMint(uint256 numberOfTokens) {
     require(
-      publicMintId + numberOfTokens <= maxDropMint,
+      currentDrop[msg.sender] < dropNumber || currentDrop[msg.sender] == dropNumber && currentMinted[msg.sender] + numberOfTokens <= maxMintPerDrop && mintFrom + whiteListSize + publicMintId + numberOfTokens < mintTo,
       "Error: Not enough tokens remaining to mint!"
     );
     _;
@@ -57,20 +83,59 @@ contract LilBruvsNFT is ERC721URIStorage, Ownable, ReentrancyGuard {
     _;
   }
 
+  modifier onlyNotClaimed() {
+    require(((currentDrop[msg.sender] == dropNumber && !isClaimed[msg.sender]) || currentDrop[msg.sender] < dropNumber), "ERR: You already claimed!");
+    require(((currentDrop[msg.sender] == dropNumber && currentMinted[msg.sender] < maxMintPerDrop) || currentDrop[msg.sender] < dropNumber), "ERR: You cannot mint more at this phase!");
+    require(whiteListMintId < whiteListSize, "ERR: WhiteListMint is finished!");
+    _;
+  }
+
+  function whiteListMint(
+    bytes32[] calldata merkleProof
+  )
+      public
+      payable
+      isMintAllowed
+      isValidMerkleProof(merkleProof, whiteListMerkleRoot)
+      isCorrectPayment(whiteListMintPrice, 1)
+      onlyNotClaimed
+      nonReentrant
+  {
+      require(mintFrom + whiteListMintId < mintFrom + whiteListSize, "Error: Already minted maximum number of tokens!");
+      _mint(msg.sender, mintFrom + whiteListMintId);
+      _setTokenURI(mintFrom + whiteListMintId, Strings.toString(mintFrom + whiteListMintId));
+      whiteListMintId ++;
+      totalMinted ++;
+      isClaimed[msg.sender] = true;
+ 
+      if(currentDrop[msg.sender] < dropNumber) {
+        currentDrop[msg.sender] = dropNumber;
+        currentMinted[msg.sender] = 0;
+      }
+      currentMinted[msg.sender] ++;
+  }
+
   function publicMint(
     uint256 numberOfTokens
   )
     public
     payable
     isMintAllowed
-    isCorrectPayment(SALE_PRICE, numberOfTokens)
+    isCorrectPayment(publicMintPrice, numberOfTokens)
     canMint(numberOfTokens)
     nonReentrant
   {
     for (uint256 i = 0; i < numberOfTokens; i++) {
-      _mint(msg.sender, publicMintId);
-      _setTokenURI(publicMintId, Strings.toString(publicMintId));
+      _mint(msg.sender, mintFrom + whiteListSize + publicMintId);
+      _setTokenURI(mintFrom + whiteListSize + publicMintId, Strings.toString(mintFrom + whiteListSize + publicMintId));
       publicMintId ++;
+      totalMinted ++;
+      
+      if(currentDrop[msg.sender] < dropNumber) {
+        currentDrop[msg.sender] = dropNumber;
+        currentMinted[msg.sender] = 0;
+      }
+      currentMinted[msg.sender] ++;
     }
   }
 
@@ -89,18 +154,35 @@ contract LilBruvsNFT is ERC721URIStorage, Ownable, ReentrancyGuard {
     baseURI = _baseURI;
   }
 
-  function setSalePrice(uint256 _price) public onlyOwner {
-    SALE_PRICE = _price;
+  function setWhiteListMerkleRoot(bytes32 merkleRoot) external onlyOwner {
+    whiteListMerkleRoot = merkleRoot;
   }
 
-  function setDrop(uint256 _dropNumber) public onlyOwner {
-    DROP_NUMBER = _dropNumber;
+  function setWhiteListMintPrice(uint256 _price) public onlyOwner {
+      whiteListMintPrice = _price;
+  }
+
+  function setPublicMintPrice(uint256 _price) public onlyOwner {
+      publicMintPrice = _price;
   }
 
   function setPaused(bool _paused) public onlyOwner {
     isPaused = _paused;
   }
 
+  function setDrop(uint256 _dropNumber) public onlyOwner {
+    dropNumber = _dropNumber;
+  }
+
+  function setWhiteListSize(uint256 _wlSize) public onlyOwner {
+    whiteListSize = _wlSize;
+  }
+
+  function setMintRange(uint256 _from, uint256 _to) public onlyOwner {
+    mintFrom = _from;
+    mintTo = _to;
+  }
+  
   function distributeTreasure() public onlyCommunity {
     uint256 toCommun = address(this).balance / 2;
     uint256 toTaylor = address(this).balance / 4;
